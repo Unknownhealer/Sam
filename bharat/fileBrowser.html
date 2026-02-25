@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device File Browser</title>
+    <style>
+        :root { --main-bg: #1a1b26; --text-color: #a9b1d6; --link-color: #7aa2f7; --header-bg: #24283b; --border-color: #414868; --success-color: #73d0ff; --error-color: #f7768e; --info-color: #e0af68; }
+        body { background-color: var(--main-bg); color: var(--text-color); font-family: 'Consolas', 'Menlo', monospace; margin: 0; padding: 15px; }
+        h1 { color: #c0caf5; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+        #file-list { list-style: none; padding: 0; }
+        #file-list li { padding: 8px 5px; border-bottom: 1px solid #2a2d3d; display: flex; align-items: center; cursor: pointer; }
+        #file-list li:hover { background-color: var(--header-bg); }
+        #file-list a { text-decoration: none; color: var(--link-color); width: 100%; }
+        .icon { margin-right: 15px; font-size: 1.2em; }
+        
+        /* Device Disconnected Popup */
+        #popup { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center; text-align: center; z-index: 1000; }
+        #popup-content { background: var(--main-bg); padding: 30px; border-radius: 5px; border: 1px solid #555; }
+        #popup-content h2 { margin-top: 0; color: var(--error-color); }
+        #popup-content button { background: var(--error-color); border: none; color: white; padding: 10px 20px; font-size: 1em; cursor: pointer; margin-top: 15px; }
+        
+        /* Status Alert (Toast) */
+        #status-alert {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            padding: 12px 20px; border-radius: 5px; color: #fff; opacity: 0;
+            transition: opacity 0.3s ease-in-out, background-color 0.3s;
+            pointer-events: none; /* Allows clicks to pass through */
+            z-index: 999;
+            min-width: 250px;
+            text-align: center;
+        }
+        .alert-info { background-color: var(--info-color); }
+        .alert-success { background-color: var(--success-color); }
+        .alert-error { background-color: var(--error-color); }
+        .alert-show { opacity: 1; }
+    </style>
+</head>
+<body>
+    <h1>Device File Browser</h1>
+    <h3 id="current-path">/</h3>
+    <ul id="file-list"><li>Loading...</li></ul>
+
+    <div id="popup">
+        <div id="popup-content">
+            <h2>Connection Lost</h2>
+            <p>The target device has disconnected or the web socket failed.</p>
+            <button onclick="window.close()">Close</button>
+        </div>
+    </div>
+
+    <div id="status-alert"></div>
+
+    <script>
+        const fileList = document.getElementById('file-list');
+        const currentPathHeader = document.getElementById('current-path');
+        const popup = document.getElementById('popup');
+        const statusAlert = document.getElementById('status-alert');
+
+        const params = new URLSearchParams(window.location.search);
+        const deviceId = params.get('id');
+        if (!deviceId) {
+            fileList.innerHTML = '<li>Error: No device ID specified in URL.</li>';
+            throw new Error("No device ID");
+        }
+
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}`;
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log('Connected to server.');
+            // Identify this session to the server. The server's connection handler
+            // will internally generate a unique ID for this browser session.
+            ws.send(JSON.stringify({ type: 'identify_file_browser', deviceId: deviceId }));
+            
+            // Initiate the file browse to the root. The Android code handles redirecting
+            // this to /storage/emulated/0/
+            navigate('/'); 
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'file_list') {
+                renderFileList(data.path, data.files);
+            } else if (data.type === 'device_disconnected') {
+                popup.style.display = 'flex';
+            } else if (data.type === 'web_status') { // NEW: Handle status alerts
+                showStatusAlert(data.message, data.status);
+            }
+        };
+
+        ws.onclose = () => { popup.style.display = 'flex'; };
+        ws.onerror = (error) => { console.error('WebSocket Error:', error); };
+
+
+        // Function to send directory browsing request
+        function navigate(path) {
+            // Note: The 'replyTo' ID is implicitly handled by the server using
+            // the WebSocket connection ID of this browser session.
+            ws.send(JSON.stringify({ type: 'browse_files', path: path }));
+            fileList.innerHTML = '<li>Loading...</li>';
+        }
+
+        // NEW: Function to send file download request
+        function downloadFile(path) {
+            ws.send(JSON.stringify({ type: 'download_file', path: path }));
+            showStatusAlert(`Requesting file: ${path.substring(path.lastIndexOf('/') + 1)}`, 'info');
+        }
+
+        // NEW: Function to display the status alerts/popups
+        let statusTimeout;
+        function showStatusAlert(message, statusType = 'info') {
+            clearTimeout(statusTimeout);
+            
+            // Reset and apply new classes/content
+            statusAlert.className = '';
+            statusAlert.textContent = message;
+            statusAlert.classList.add(`alert-${statusType}`, 'alert-show');
+
+            // Hide alert after 5 seconds
+            statusTimeout = setTimeout(() => {
+                statusAlert.classList.remove('alert-show');
+            }, 5000);
+        }
+
+        function renderFileList(path, files) {
+            currentPathHeader.textContent = `Current Path: ${path}`;
+            fileList.innerHTML = ''; // Clear the list
+
+            // Add "Go Up" link if not at the root path of the device
+            if (path !== '/' && path !== '/storage/emulated/0') {
+                // Determine parent path, handling the external storage root case.
+                let parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+                
+                const li = document.createElement('li');
+                li.innerHTML = `<span class="icon">⤴️</span><a href="#" onclick="navigate('${parentPath}')">.. (Parent Directory)</a>`;
+                fileList.appendChild(li);
+            }
+
+            files.forEach(file => {
+                const li = document.createElement('li');
+                
+                // For directories, call navigate()
+                if (file.isDir) {
+                    li.innerHTML = `<span class="icon">📁</span><a href="#" onclick="navigate('${file.path}')">${file.name}</a>`;
+                } 
+                // For files, call downloadFile()
+                else {
+                    li.innerHTML = `<span class="icon">📄</span><a href="#" onclick="downloadFile('${file.path.replace(/'/g, "\\'")}')">${file.name}</a>`;
+                }
+                fileList.appendChild(li);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Device Shell</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --main-bg: #1a1b26;
+            --text-color: #a9b1d6;
+            --prompt-color: #7aa2f7;
+            --output-color: #c0caf5;
+            --error-color: #f7768e;
+            --input-bg: #24283b;
+        }
+
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        body {
+            background-color: var(--main-bg);
+            color: var(--text-color);
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #terminal-container {
+            flex-grow: 1;
+            overflow: auto;
+            padding: 10px;
+            padding-bottom: 50px; /* Space for the fixed input bar */
+            box-sizing: border-box;
+        }
+
+        .line {
+            margin: 0;
+            padding: 1px 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .prompt {
+            color: var(--prompt-color);
+        }
+        .output {
+            color: var(--output-color);
+        }
+        .error {
+            color: var(--error-color);
+        }
+
+        #input-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            align-items: center;
+            padding: 8px 10px;
+            background-color: var(--input-bg);
+            border-top: 1px solid #414868;
+            box-sizing: border-box;
+        }
+
+        #prompt-symbol {
+            font-size: 1.5em;
+            line-height: 1;
+            color: var(--prompt-color);
+            margin-right: 8px;
+        }
+
+        #prompt-text {
+            color: var(--text-color);
+            margin-right: 8px;
+            white-space: nowrap;
+        }
+
+        #command-input {
+            flex-grow: 1;
+            background: none;
+            border: none;
+            color: var(--text-color);
+            font-family: inherit;
+            font-size: inherit;
+            outline: none;
+        }
+
+        #popup-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: none; /* Hidden by default */
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        #popup-content {
+            background: var(--main-bg);
+            padding: 20px 30px;
+            border-radius: 5px;
+            border: 1px solid #555;
+            text-align: center;
+        }
+
+        #popup-content h2 {
+            margin-top: 0;
+            color: var(--error-color);
+        }
+
+        #popup-content button {
+            background: #565f89;
+            border: none;
+            color: white;
+            padding: 10px 25px;
+            margin-top: 10px;
+            font-size: 1em;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal-container"></div>
+    <div id="input-container">
+        <span id="prompt-symbol">𓃮</span>
+        <span id="prompt-text">/ ></span>
+        <input type="text" id="command-input" autofocus autocomplete="off" autocapitalize="none">
+    </div>
+
+    <div id="popup-overlay">
+        <div id="popup-content">
+            <h2>Connection Lost</h2>
+            <p>The device has disconnected.</p>
+            <button onclick="window.close()">OK</button>
+        </div>
+    </div>
+
+    <script>
+        const terminalContainer = document.getElementById('terminal-container');
+        const input = document.getElementById('command-input');
+        const promptText = document.getElementById('prompt-text');
+        const popup = document.getElementById('popup-overlay');
+
+        const history = [];
+        let historyIndex = -1;
+
+        const params = new URLSearchParams(window.location.search);
+        const deviceId = params.get('id');
+
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}`;
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            if (!deviceId) {
+                addOutput('FATAL: No device ID specified in URL.', 'error');
+                return;
+            }
+            ws.send(JSON.stringify({ type: 'identify_shell', deviceId: deviceId }));
+            addOutput('Connected. Type "help" for available commands.', 'prompt');
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'device_disconnected') {
+                addOutput('\n[FATAL] The target device has disconnected from the server.', 'error');
+                popup.style.display = 'flex';
+                input.disabled = true;
+            }
+            else if (data.type === 'shell_output') {
+                if (data.output) addOutput(data.output, 'output');
+                if (data.error) addOutput(data.error, 'error');
+                promptText.textContent = data.cwd + ' >';
+            }
+        };
+
+        ws.onclose = () => {
+            addOutput('\n[FATAL] Connection to the server has been lost.', 'error');
+            popup.style.display = 'flex';
+            input.disabled = true;
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const command = input.value;
+                if (command.trim() !== '') {
+                    addOutput(`${document.getElementById('prompt-symbol').textContent} ${promptText.textContent} ${command}`, '');
+                    ws.send(JSON.stringify({ type: 'shell_command', command: command }));
+                    history.push(command);
+                    historyIndex = history.length;
+                }
+                input.value = '';
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    input.value = history[historyIndex];
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (historyIndex < history.length - 1) {
+                    historyIndex++;
+                    input.value = history[historyIndex];
+                } else {
+                    historyIndex = history.length;
+                    input.value = '';
+                }
+            }
+        });
+
+        function addOutput(text, className) {
+            const p = document.createElement('p');
+            p.className = `line ${className}`;
+            p.textContent = text;
+            terminalContainer.appendChild(p);
+            terminalContainer.scrollTop = terminalContainer.scrollHeight;
+        }
+
+        window.addEventListener('click', () => input.focus());
+        input.focus();
+
+        document.addEventListener('gesturestart', (e) => e.preventDefault());
+        document.addEventListener('dblclick', (e) => e.preventDefault());
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', (e) => {
+            const now = (new Date()).getTime();
+            if (now - lastTouchEnd <= 300) {
+                e.preventDefault();
+            }
+            lastTouchEnd = now;
+        }, false);
+    </script>
+</body>
+</html>

