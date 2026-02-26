@@ -3,8 +3,7 @@
 // ================================================================= //
 // Part 1: Configuration & Setup
 // ================================================================= //
-
-const http = require('http');
+const https = require('https'); 
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -73,9 +72,9 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Vital for Render's Health Check and Keep-Alive
-app.get('/', (req, res) => res.send('Bot is Running'));
-app.get('/ping', (req, res) => res.send('pong'));
+app.get('/ping', (req, res) => {
+    res.send('pong');
+});
 
 app.get('/shell', (req, res) => res.sendFile(path.join(__dirname, 'shell.html')));
 app.get('/files', (req, res) => res.sendFile(path.join(__dirname, 'fileBrowser.html')));
@@ -458,13 +457,14 @@ server.listen(WEB_SERVER_PORT, '0.0.0.0', () => {
     console.log(`🔗 Base URL: ${BASE_URL}`);
 });
 
-// Self-ping logic to keep Render awake
 if (process.env.RENDER_EXTERNAL_URL) {
     setInterval(() => {
-        http.get(`${BASE_URL}/ping`, (res) => {
-            console.log('Self-ping successful');
+        https.get(`${process.env.RENDER_EXTERNAL_URL}/ping`, (res) => {
+            if (res.statusCode === 200) {
+                console.log('✅ Self-ping successful: Server is awake');
+            }
         }).on('error', (err) => {
-            console.error('Self-ping failed:', err.message);
+            console.error('❌ Self-ping failed:', err.message);
         });
-    }, 600000); // Ping every 10 minutes
+    }, 600000);
 }
